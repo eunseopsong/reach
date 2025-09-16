@@ -1,6 +1,4 @@
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
-# All rights reserved.
-#
+# Copyright (c) 2022-2025, The Isaac Lab Project Developers
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import MISSING
@@ -27,7 +25,6 @@ import isaaclab_tasks.manager_based.manipulation.reach.mdp as mdp
 # Scene definition
 ##
 
-
 @configclass
 class ReachSceneCfg(InteractiveSceneCfg):
     """Configuration for the scene with a robotic arm."""
@@ -39,25 +36,17 @@ class ReachSceneCfg(InteractiveSceneCfg):
         init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, -1.05)),
     )
 
-    # table = AssetBaseCfg(
-    #     prim_path="{ENV_REGEX_NS}/Table",
-    #     spawn=sim_utils.UsdFileCfg(
-    #         usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Mounts/SeattleLabTable/table_instanceable.usd",
-    #     ),
-    #     init_state=AssetBaseCfg.InitialStateCfg(pos=(0.55, 0.0, 0.0), rot=(0.70711, 0.0, 0.0, 0.70711)),
-    # )
-
+    # Concave workpiece (사용자 USD)
     table = AssetBaseCfg(
-        prim_path="{ENV_REGEX_NS}/Workpiece",   # 이름은 Table 그대로 둬도 되지만 Workpiece로 바꾸면 더 명확
+        prim_path="{ENV_REGEX_NS}/Workpiece",
         spawn=sim_utils.UsdFileCfg(
             usd_path="/home/eunseop/isaac/isaac_save/concave_surface.usd",
         ),
         init_state=AssetBaseCfg.InitialStateCfg(
             pos=(0.0, 0.0, 0.0),
-            rot=(1.0, 0.0, 0.0, 0.0),   # Freeze 했다면 단위 쿼터니언 사용
+            rot=(1.0, 0.0, 0.0, 0.0),
         ),
     )
-
 
     # robots
     robot: ArticulationCfg = MISSING
@@ -68,16 +57,16 @@ class ReachSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.DomeLightCfg(color=(0.75, 0.75, 0.75), intensity=2500.0),
     )
 
-
 ##
 # MDP settings
 ##
 
-
 @configclass
 class CommandsCfg:
-    """Command terms for the MDP."""
+    """Command terms for the MDP.
 
+    기본값은 UniformPose. (UR10 전용 cfg에서 TXT로 교체)
+    """
     ee_pose = mdp.UniformPoseCommandCfg(
         asset_name="robot",
         body_name=MISSING,
@@ -93,24 +82,16 @@ class CommandsCfg:
         ),
     )
 
-
 @configclass
 class ActionsCfg:
-    """Action specifications for the MDP."""
-
     arm_action: ActionTerm = MISSING
     gripper_action: ActionTerm | None = None
-
 
 @configclass
 class ObservationsCfg:
     """Observation specifications for the MDP."""
-
     @configclass
     class PolicyCfg(ObsGroup):
-        """Observations for policy group."""
-
-        # observation terms (order preserved)
         joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         pose_command = ObsTerm(func=mdp.generated_commands, params={"command_name": "ee_pose"})
@@ -120,103 +101,93 @@ class ObservationsCfg:
             self.enable_corruption = True
             self.concatenate_terms = True
 
-    # observation groups
     policy: PolicyCfg = PolicyCfg()
-
 
 @configclass
 class EventCfg:
-    """Configuration for events."""
-
     reset_robot_joints = EventTerm(
         func=mdp.reset_joints_by_scale,
         mode="reset",
-        params={
-            "position_range": (0.5, 1.5),
-            "velocity_range": (0.0, 0.0),
-        },
+        params={"position_range": (0.5, 1.5), "velocity_range": (0.0, 0.0)},
     )
-
+    # TXT 커맨드 갱신은 UR10 전용 cfg에서 step 이벤트로 추가
 
 @configclass
 class RewardsCfg:
-    """Reward terms for the MDP."""
+    """Reward terms for the MDP (추종 강화 + 수렴 shaping + 보너스)."""
 
-    # task terms
+    # 위치 오차 (음수 L2)
     end_effector_position_tracking = RewTerm(
         func=mdp.position_command_error,
-        weight=-0.2,
+        weight=-1.2,
         params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "command_name": "ee_pose"},
     )
+    # 근접시 미세 shaping (양수)
     end_effector_position_tracking_fine_grained = RewTerm(
         func=mdp.position_command_error_tanh,
-        weight=0.1,
-        params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "std": 0.1, "command_name": "ee_pose"},
+        weight=0.6,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "std": 0.08, "command_name": "ee_pose"},
     )
+    # 자세 오차 (음수, 최단각)
     end_effector_orientation_tracking = RewTerm(
         func=mdp.orientation_command_error,
-        weight=-0.1,
+        weight=-0.8,
         params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "command_name": "ee_pose"},
     )
-
-    # action penalty
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.0001)
-    joint_vel = RewTerm(
-        func=mdp.joint_vel_l2,
-        weight=-0.0001,
-        params={"asset_cfg": SceneEntityCfg("robot")},
+    # (NEW) 자세 exp-shaping (양수)
+    end_effector_orientation_tracking_shaping = RewTerm(
+        func=mdp.orientation_error_exp,
+        weight=0.5,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "command_name": "ee_pose", "sigma_deg": 8.0},
     )
 
+    # 부드러움/안전
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.0005)
+    joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.0003, params={"asset_cfg": SceneEntityCfg("robot")})
+
+    # (NEW) 성공 보너스
+    success_bonus = RewTerm(
+        func=mdp.success_bonus,
+        weight=1.0,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=MISSING),
+            "command_name": "ee_pose",
+            "bonus": 10.0,
+            "pos_eps": 0.01,
+            "ori_eps_deg": 5.0,
+        },
+    )
 
 @configclass
 class TerminationsCfg:
-    """Termination terms for the MDP."""
-
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
-
 
 @configclass
 class CurriculumCfg:
-    """Curriculum terms for the MDP."""
-
-    action_rate = CurrTerm(
-        func=mdp.modify_reward_weight, params={"term_name": "action_rate", "weight": -0.005, "num_steps": 4500}
-    )
-
-    joint_vel = CurrTerm(
-        func=mdp.modify_reward_weight, params={"term_name": "joint_vel", "weight": -0.001, "num_steps": 4500}
-    )
-
+    action_rate = CurrTerm(func=mdp.modify_reward_weight,
+                           params={"term_name": "action_rate", "weight": -0.005, "num_steps": 4500})
+    joint_vel  = CurrTerm(func=mdp.modify_reward_weight,
+                           params={"term_name": "joint_vel", "weight": -0.001, "num_steps": 4500})
 
 ##
 # Environment configuration
 ##
 
-
-
-
 @configclass
 class ReachEnvCfg(ManagerBasedRLEnvCfg):
     """Configuration for the reach end-effector pose tracking environment."""
-
-    # Scene settings
     scene: ReachSceneCfg = ReachSceneCfg(num_envs=4096, env_spacing=2.5)
-    # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
     commands: CommandsCfg = CommandsCfg()
-    # MDP settings
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
     events: EventCfg = EventCfg()
     curriculum: CurriculumCfg = CurriculumCfg()
 
     def __post_init__(self):
-        """Post initialization."""
-        # general settings
         self.decimation = 2
         self.sim.render_interval = self.decimation
         self.episode_length_s = 12.0
         self.viewer.eye = (3.5, 3.5, 3.5)
-        # simulation settings
         self.sim.dt = 1.0 / 60.0
