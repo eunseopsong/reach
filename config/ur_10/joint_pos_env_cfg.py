@@ -60,6 +60,7 @@ def txt_pose_command(env, command_name: str, file_path: str,
     - 현재 EE에서 가장 가까운 웨이포인트 + lookahead 를 목표로 설정
     """
     dev = env.device
+    command_name = "ee_pose"
 
     # (1) 경로 캐시 로드 1회
     if not hasattr(env, "_txt_traj_loaded"):
@@ -140,7 +141,7 @@ class UR10ReachEnvCfg(ReachEnvCfg):
             func=txt_pose_command,
             mode="step",
             params={
-                "command_name": "ee_pose",
+                # "command_name": "ee_pose",
                 "file_path": "/home/eunseop/nrs_ws/src/nrs_path2/data/geodesic_waypoints.txt",  # <-- 너의 TXT 경로로 변경
                 "coordinate": "world",
                 "lookahead": 20,
